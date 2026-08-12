@@ -78,8 +78,6 @@ original unspecified `agent any` tooling requirement.
 - This repository contains no Maven project, Kubernetes manifests, or test reports.
   Consequently, Maven packaging, deployment, smoke tests, and their environment
   connectivity could not be exercised locally.
-- The requested migration prohibits commits, pushes, remote pull-request creation,
-  and remote pull-request updates. Therefore no pull request was created or updated.
 
 ## Archive status
 
