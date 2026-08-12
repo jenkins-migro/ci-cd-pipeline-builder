@@ -1,0 +1,40 @@
+name: Jenkins variable-sharing example
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  variable-sharing:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 is required for the Jenkins-equivalent git describe command.
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Compute and share pipeline variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          POM_VERSION="$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          BUILD_RELEASE_VERSION="${POM_VERSION/-SNAPSHOT/}"
+          IS_SNAPSHOT=false
+          if [[ "${POM_VERSION}" == *-SNAPSHOT ]]; then
+            IS_SNAPSHOT=true
+          fi
+          GIT_TAG_COMMIT="$(git describe --tags --always)"
+
+          tags_extra="value_1"
+          echo "stage one: tags_extra: ${tags_extra}"
+          echo "stage two: tags_extra: ${tags_extra}"
+          if [ "${tags_extra}" != "bla" ]; then
+            echo "stage three: tags_extra: ${tags_extra}"
+          fi
+
+          printf 'POM_VERSION=%s\n' "${POM_VERSION}"
+          printf 'BUILD_RELEASE_VERSION=%s\n' "${BUILD_RELEASE_VERSION}"
+          printf 'IS_SNAPSHOT=%s\n' "${IS_SNAPSHOT}"
+          printf 'GIT_TAG_COMMIT=%s\n' "${GIT_TAG_COMMIT}"
