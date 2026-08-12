@@ -1,0 +1,143 @@
+name: Build, test, and deploy application
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: Deployment environment
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+      skip_tests:
+        description: Skip Maven test execution
+        required: true
+        default: false
+        type: boolean
+      version:
+        description: Release version to identify in build output
+        required: true
+        default: 1.0.0
+        type: string
+      deployment_type:
+        description: Production deployment strategy (used only for production)
+        required: true
+        default: rolling
+        type: choice
+        options:
+          - blue-green
+          - rolling
+          - canary
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build version
+        env:
+          SKIP_TESTS: ${{ inputs.skip_tests }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "Building version ${VERSION}"
+          mvn clean package -DskipTests="${SKIP_TESTS}"
+
+  test:
+    name: Test
+    needs: build
+    if: ${{ inputs.skip_tests == false }}
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Run Maven tests
+        run: mvn test
+      - name: List Surefire test reports
+        if: ${{ always() }}
+        run: find . -path '*/surefire-reports/*.xml' -type f -print
+      - name: Archive Surefire test reports
+        if: ${{ always() }}
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: surefire-test-reports
+          path: '**/surefire-reports/*.xml'
+          if-no-files-found: warn
+          retention-days: 14
+
+  deploy:
+    name: Deploy
+    needs:
+      - build
+      - test
+    if: ${{ always() && needs.build.result == 'success' && (inputs.skip_tests || needs.test.result == 'success') }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.target_environment }}
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Configure Kubernetes access
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          test -n "${KUBECONFIG_B64}" || {
+            echo "KUBECONFIG_B64 must be configured as an environment secret." >&2
+            exit 1
+          }
+          install -d -m 700 "${HOME}/.kube"
+          printf '%s' "${KUBECONFIG_B64}" | base64 --decode > "${HOME}/.kube/config"
+          chmod 600 "${HOME}/.kube/config"
+      - name: Deploy selected environment
+        env:
+          DEPLOYMENT_TYPE: ${{ inputs.deployment_type }}
+          TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+        run: |
+          case "${TARGET_ENVIRONMENT}" in
+            dev)
+              echo "Deploying to development environment"
+              kubectl apply -f k8s/dev/
+              ;;
+            staging)
+              echo "Deploying to staging environment"
+              kubectl apply -f k8s/staging/
+              ;;
+            production)
+              echo "Deploying to production with ${DEPLOYMENT_TYPE} strategy"
+              kubectl apply -f "k8s/production/${DEPLOYMENT_TYPE}/"
+              ;;
+          esac
+      - name: Run smoke tests
+        if: ${{ inputs.target_environment == 'staging' || inputs.target_environment == 'production' }}
+        env:
+          TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+        run: curl --fail "http://${TARGET_ENVIRONMENT}.example.com/health"
+
+  report-result:
+    name: Report result
+    needs:
+      - build
+      - test
+      - deploy
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report pipeline outcome
+        env:
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+        run: |
+          if [ "${DEPLOY_RESULT}" = "success" ]; then
+            echo "Deployment to ${TARGET_ENVIRONMENT} completed successfully"
+          else
+            echo "Deployment to ${TARGET_ENVIRONMENT} failed"
+            exit 1
+          fi
